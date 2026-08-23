@@ -1,0 +1,135 @@
+name: Deploy application
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        required: true
+        type: string
+      production_branch:
+        type: string
+        default: main
+      development_branch:
+        type: string
+        default: development
+      port:
+        type: number
+        default: 8080
+      health_path:
+        type: string
+        default: /healthz
+      replicas:
+        type: number
+        default: 1
+      dockerfile:
+        type: string
+        default: Dockerfile
+      production_build_args:
+        type: string
+        default: ""
+      development_build_args:
+        type: string
+        default: ""
+    secrets:
+      # Base64 kubeconfig for the target cluster. Store one per GitHub
+      # environment: development -> projects-dev, production -> projects-production.
+      KUBE_CONFIG:
+        required: true
+      # Fine-grained PAT with read:packages, used as the in-cluster pull secret.
+      GHCR_PULL_TOKEN:
+        required: true
+      # Cloudflare Access service token: the kube-API is only reachable through
+      # the Access-gated tunnel route, never directly.
+      CF_ACCESS_CLIENT_ID:
+        required: true
+      CF_ACCESS_CLIENT_SECRET:
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  deploy:
+    if: github.ref_name == inputs.production_branch || github.ref_name == inputs.development_branch
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == inputs.production_branch && 'production' || 'development' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push image
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/${{ inputs.app_name }}:${{ github.ref_name }}-${{ github.sha }}
+          PRODUCTION_BRANCH: ${{ inputs.production_branch }}
+          PRODUCTION_BUILD_ARGS: ${{ inputs.production_build_args }}
+          DEVELOPMENT_BUILD_ARGS: ${{ inputs.development_build_args }}
+        run: |
+          IMAGE="${IMAGE,,}"  # GHCR requires a lowercase repository path
+          if [ "$GITHUB_REF_NAME" = "$PRODUCTION_BRANCH" ]; then
+            BUILD_ARGS="$PRODUCTION_BUILD_ARGS"
+          else
+            BUILD_ARGS="$DEVELOPMENT_BUILD_ARGS"
+          fi
+          # Build arguments are controlled by the caller workflow, not user input.
+          docker build $BUILD_ARGS --file "${{ inputs.dockerfile }}" --tag "$IMAGE" .
+          docker push "$IMAGE"
+      - name: Deploy to Kubernetes
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+          PRODUCTION_BRANCH: ${{ inputs.production_branch }}
+          PORT: ${{ inputs.port }}
+          HEALTH_PATH: ${{ inputs.health_path }}
+          REPLICAS: ${{ inputs.replicas }}
+          IMAGE: ghcr.io/${{ github.repository_owner }}/${{ inputs.app_name }}:${{ github.ref_name }}-${{ github.sha }}
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          IMAGE="${IMAGE,,}"  # GHCR requires a lowercase repository path
+          if [ "$GITHUB_REF_NAME" != "$PRODUCTION_BRANCH" ]; then
+            APP_NAME="${APP_NAME}-test"
+            KUBE_API_HOST="${{ vars.KUBE_API_HOST_DEV }}"
+            PROMOTE_SECONDS=30
+          else
+            KUBE_API_HOST="${{ vars.KUBE_API_HOST_PROD }}"
+            # The new version serves on preview.<hostname> (Cloudflare Access
+            # gated) for ten minutes before promotion; abort with
+            # `kubectl argo rollouts abort` to reject it.
+            PROMOTE_SECONDS=600
+          fi
+          export APP_NAME PROMOTE_SECONDS
+          umask 077
+          printf '%s' "$KUBE_CONFIG" | base64 -d > "$RUNNER_TEMP/kubeconfig"
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          # kube-API access rides the Cloudflare tunnel: local TCP proxy, then
+          # point the kubeconfig at it (the k3s cert includes 127.0.0.1).
+          curl -fsSL -o /usr/local/bin/cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x /usr/local/bin/cloudflared
+          cloudflared access tcp --hostname "$KUBE_API_HOST" --url 127.0.0.1:6443 &
+          for i in $(seq 1 30); do
+            (exec 3<>/dev/tcp/127.0.0.1/6443) 2>/dev/null && break
+            sleep 1
+          done
+          CLUSTER=$(kubectl config view -o jsonpath='{.contexts[0].context.cluster}')
+          kubectl config set-cluster "$CLUSTER" --server=https://127.0.0.1:6443
+          kubectl create namespace "$APP_NAME" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n "$APP_NAME" create secret docker-registry registry-ghcr \
+            --docker-server=ghcr.io \
+            --docker-username="${{ github.repository_owner }}" \
+            --docker-password="$GHCR_PULL_TOKEN" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          curl -fsSL -o /usr/local/bin/kubectl-argo-rollouts \
+            https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
+          chmod +x /usr/local/bin/kubectl-argo-rollouts
+          # Only these six are substituted; any other $ in the manifest (shell
+          # scripts in container args, k8s $(VAR) expansion) passes through.
+          envsubst '$APP_NAME $REPLICAS $IMAGE $PORT $HEALTH_PATH $PROMOTE_SECONDS' \
+            < kubernetes/application.yaml | kubectl apply -f -
+          # Waits through the preview window; aborts fail this job and leave stable serving.
+          kubectl argo rollouts -n "$APP_NAME" status "$APP_NAME" --timeout 15m
