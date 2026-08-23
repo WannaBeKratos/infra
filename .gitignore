@@ -1,0 +1,16 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars
+.kubeconfig
+*_kubeconfig.yaml
+.terraform-linux/
+apply-*.log
+tfplan
+*_kustomization_backup.yaml
+backend.hcl
+.claude/settings.local.json
+# bootstrap/ needs no entries of its own: .terraform/, .terraform-linux/ and
+# *.tfstate above already match at any depth. Its .terraform.lock.hcl is
+# committed, like the root one.

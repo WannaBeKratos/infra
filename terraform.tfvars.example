@@ -1,0 +1,56 @@
+# Copy to terraform.tfvars, which is gitignored and stays on the operator's
+# machine. Everything personal — the operator's IP, the operator's addresses —
+# lives here rather than as a default in variables.tf, because this repository
+# is public.
+#
+# After changing anything in this file, refresh the CI copy so plans keep
+# matching what you apply:
+#   gh secret set TERRAFORM_TFVARS < terraform.tfvars
+#
+# Provide the two API tokens as TF_VAR_hcloud_token and TF_VAR_cloudflare_api_token
+# instead of writing them here. The Cloudflare token needs Account:Cloudflare
+# Tunnel:Edit plus Zone:Read and DNS:Edit for the zones below.
+
+cloudflare_account_id = "your-account-id"
+
+# Zone IDs from the Cloudflare dashboard (zone overview, right column).
+cloudflare_zone_ids = {
+  "applim.com"            = "zone-id"
+  "piergiorgioyankah.com" = "zone-id"
+}
+
+# Required. Your own public address — the only thing allowed to reach node SSH
+# and, separately, the kube-API on 6443. CI never uses either path: it goes
+# through the Access-gated tunnel route. Both accept a list, so add a second
+# CIDR when you work from somewhere else.
+firewall_ssh_source      = ["203.0.113.10/32"]
+firewall_kube_api_source = ["203.0.113.10/32"]
+
+# Emails Cloudflare Access lets through to the blue/green preview hostnames and
+# to every dev test hostname, by one-time PIN. Leave empty and the Access policy
+# has no principals, which Cloudflare rejects at apply time.
+preview_access_emails = ["you@example.com"]
+
+# Paths to the passphrase-less SSH keypair used for cluster nodes.
+# ssh_public_key_path  = "~/.ssh/hetzner_kube.pub"
+# ssh_private_key_path = "~/.ssh/hetzner_kube"
+
+# Production workspace only. Set true after all dev deployments are healthy
+# and you are ready to move production traffic away from App Platform.
+enable_production_cutover = false
+
+# Per-app runtime environment, rendered into the applim-env Secret. Real values
+# only ever live in terraform.tfvars.
+# applim_env = {
+#   Skills__Model__ApiKey = "..."
+# }
+
+operations_domain = "example.com"
+
+sites = {
+  my-site = {
+    production_hostname = "www.example.com"
+    production_aliases  = ["example.com"]
+    test_hostname       = "test.example.com"
+  }
+}

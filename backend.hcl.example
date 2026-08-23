@@ -1,0 +1,5 @@
+# Copy to backend.hcl (gitignored) and fill with an R2 API token scoped
+# "Object Read & Write" on the projects-terraform-state bucket:
+# Cloudflare dashboard -> R2 -> Manage API tokens.
+access_key = "PASTE-R2-ACCESS-KEY-ID"
+secret_key = "PASTE-R2-SECRET-ACCESS-KEY"
