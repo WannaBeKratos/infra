@@ -1,0 +1,23 @@
+# Secret scanning for a public repository (job `gitleaks` in
+# .github/workflows/terraform.yml). Default rule set plus two allowlists for
+# findings that were checked by hand and are not secrets.
+#
+# gitleaks has no `fingerprints` key in its config — that only exists in
+# .gitleaksignore, and a fingerprint is tied to one commit SHA, so it stops
+# matching the moment the line moves. The allowlists below are keyed on the
+# value instead, which keeps working across rewrites.
+[extend]
+useDefault = true
+
+[[allowlists]]
+# generic-api-key flags `KUBE_API_HOST="k8s.piergiorgioyankah.com"` on entropy.
+# It is a public DNS name; the kube-API behind it is gated by Cloudflare Access
+# and a Hetzner firewall. Historic fingerprints:
+#   0701515fa192f3aedf4b20e9c8fb1933f40f5657:.github/workflows/terraform.yml:generic-api-key:93
+#   b513e2baa9f5662ac86f5aa6463c5eeeaa36f7ed:.github/workflows/deploy-application.yml:generic-api-key:98
+description = "kube-API tunnel hostname, public DNS rather than a credential"
+regexes = ['''^k8s(-dev)?\.piergiorgioyankah\.com$''']
+
+[[allowlists]]
+description = "Generated architecture diagrams: binary PNGs are entropy noise"
+paths = ['''docs/diagrams/.*\.png''']

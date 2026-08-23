@@ -1,0 +1,20 @@
+# Checkov gate for CI (see .github/workflows/terraform.yml). Scans the repo's own
+# Terraform; vendored modules and local state dirs are out of scope.
+framework:
+  - terraform
+skip-path:
+  - .terraform
+  - .terraform-linux
+  - bootstrap/.terraform
+skip-check:
+  # Registry module pinned by version; commit-hash pinning is not how the
+  # kube-hetzner registry module is consumed.
+  - CKV_TF_1
+  # Images are pinned by version tag on purpose; digests would make routine
+  # cloudflared updates a two-step chore for no threat this repo faces.
+  - CKV_K8S_43
+  # cloudflared takes its tunnel token as TUNNEL_TOKEN by design; there is no
+  # file-based alternative worth a wrapper.
+  - CKV_K8S_35
+compact: true
+quiet: true
