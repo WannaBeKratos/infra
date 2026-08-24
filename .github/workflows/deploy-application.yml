@@ -75,7 +75,10 @@ jobs:
             BUILD_ARGS="$DEVELOPMENT_BUILD_ARGS"
           fi
           # Build arguments are controlled by the caller workflow, not user input.
-          docker build $BUILD_ARGS --file "${{ inputs.dockerfile }}" --tag "$IMAGE" .
+          # GIT_SHA lets an image state the commit it was built from rather than guess; a
+          # Dockerfile that declares no such ARG just ignores it (a warning, not a failure).
+          docker build $BUILD_ARGS --build-arg GIT_SHA="$GITHUB_SHA" \
+            --file "${{ inputs.dockerfile }}" --tag "$IMAGE" .
           docker push "$IMAGE"
       - name: Deploy to Kubernetes
         env:
