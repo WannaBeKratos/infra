@@ -38,6 +38,10 @@ resource "kubernetes_secret_v1" "applim_litestream" {
   data = {
     LITESTREAM_ACCESS_KEY_ID     = cloudflare_account_token.applim_feed.id
     LITESTREAM_SECRET_ACCESS_KEY = sha256(cloudflare_account_token.applim_feed.value)
-    APPLIM_FEED_REPLICA_URL      = "s3://${cloudflare_r2_bucket.applim_feed.name}/feed?endpoint=https://${var.cloudflare_account_id}.r2.cloudflarestorage.com"
+    # Bucket and endpoint travel separately because litestream 0.3 ignores an
+    # "?endpoint=" query on an s3:// URL and silently talks to AWS instead; the
+    # containers assemble a config file from these.
+    APPLIM_FEED_BUCKET   = cloudflare_r2_bucket.applim_feed.name
+    APPLIM_FEED_ENDPOINT = "https://${var.cloudflare_account_id}.r2.cloudflarestorage.com"
   }
 }
