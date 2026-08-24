@@ -199,10 +199,23 @@ an application once before the first apply that expects its Secrets.
          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
    ```
 
-5. Set that repository's environment secrets, deploy the `development` branch,
-   confirm the `test.*` hostname behind Access, then apply the `dev` workspace so
-   any Terraform-managed Secret lands in the now-existing namespace.
-6. Apply both workspaces.
+5. Give the repository the full caller kit. Reusable workflows read secrets and
+   variables from the CALLING repository, so every application repo carries its
+   own copy — miss one and the deploy fails in the tunnel step:
+
+   | Kind | Name | Value |
+   |---|---|---|
+   | secret | `KUBE_CONFIG` | base64 kubeconfig for the target clusters |
+   | secret | `GHCR_PULL_TOKEN` | read-only GHCR token for the pull secret |
+   | secret | `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` | the dev cluster's CI service token (`terraform output`) |
+   | variable | `KUBERNETES_DEPLOY_ENABLED` | `true` |
+   | variable | `KUBE_API_HOST_DEV` | the dev kube-API hostname |
+   | variable | `KUBE_API_HOST_PROD` | the production kube-API hostname |
+
+6. Deploy the `development` branch, confirm the `test.*` hostname behind Access,
+   then apply the `dev` workspace so any Terraform-managed Secret lands in the
+   now-existing namespace.
+7. Apply both workspaces.
 
 ### Rotate the R2 state token
 
