@@ -45,3 +45,25 @@ resource "kubernetes_secret_v1" "applim_litestream" {
     APPLIM_FEED_ENDPOINT = "https://${var.cloudflare_account_id}.r2.cloudflarestorage.com"
   }
 }
+
+# The site and the sweeper are one pod today, sharing the feed database through the
+# filesystem. Where they are not - two Deployments, one owning the file and serving it
+# to the other - a cluster is not a boundary on its own: any pod can reach any Service.
+# This is the token both sides carry, minted here so neither repository holds it and
+# nobody has to type it. Without this Secret the feed API is not mapped at all and the
+# app runs exactly as before, from the file.
+resource "random_password" "applim_feed_api" {
+  length  = 48
+  special = false
+}
+
+resource "kubernetes_secret_v1" "applim_feed_api" {
+  metadata {
+    name      = local.is_production ? "applim-feed-api" : "applim-test-feed-api"
+    namespace = local.is_production ? "applim" : "applim-test"
+  }
+
+  data = {
+    APPLIM_FEED_API_TOKEN = random_password.applim_feed_api.result
+  }
+}
