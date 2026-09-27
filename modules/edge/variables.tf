@@ -42,3 +42,8 @@ variable "operations_domain" {
   description = "Domain that carries the operational hostnames (kube-API et al.); must be a key of cloudflare_zone_ids."
   type        = string
 }
+
+variable "mcp_client_cidrs" {
+  description = "Source CIDRs that skip Access on the MCP and OAuth paths of the test site."
+  type        = list(string)
+}

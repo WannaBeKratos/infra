@@ -117,20 +117,31 @@ resource "cloudflare_dns_record" "tunnel" {
   ttl     = 1
 }
 
-# CI authenticates to the kube-API hostname with this service token; the
-# Access application rejects every other client at the edge.
+# CI authenticates to the kube-API hostname with a service token; the Access
+# application rejects every other client at the edge. One token per consumer
+# (this repository's CI, then each app repository by site key), so a leaked
+# pair is revoked on its own and the Access log says who connected.
 resource "cloudflare_zero_trust_access_service_token" "ci" {
+  for_each   = toset(concat(["infra"], keys(var.sites)))
   account_id = var.cloudflare_account_id
-  name       = "${var.cluster_name}-ci"
+  name       = "${var.cluster_name}-ci-${each.key}"
+  duration   = "8760h"
+}
+
+# The single shared token becomes infra's; rotate it once the app repositories
+# carry their own (docs/OPERATIONS.md, "Migrate to the hardened setup").
+moved {
+  from = cloudflare_zero_trust_access_service_token.ci
+  to   = cloudflare_zero_trust_access_service_token.ci["infra"]
 }
 
 resource "cloudflare_zero_trust_access_policy" "kube_api_ci" {
   account_id = var.cloudflare_account_id
   name       = "${var.cluster_name}-kube-api-ci"
   decision   = "non_identity"
-  include = [{
-    service_token = { token_id = cloudflare_zero_trust_access_service_token.ci.id }
-  }]
+  include = [
+    for token in cloudflare_zero_trust_access_service_token.ci : { service_token = { token_id = token.id } }
+  ]
 }
 
 resource "cloudflare_zero_trust_access_application" "kube_api" {
@@ -211,6 +222,8 @@ resource "kubernetes_deployment_v1" "cloudflared" {
       }
 
       spec {
+        automount_service_account_token = false
+
         security_context {
           seccomp_profile {
             type = "RuntimeDefault"
@@ -218,8 +231,10 @@ resource "kubernetes_deployment_v1" "cloudflared" {
         }
 
         container {
-          name              = "cloudflared"
-          image             = "cloudflare/cloudflared:2025.8.1"
+          name = "cloudflared"
+          # Tag for people, digest for the kubelet: this pod holds the tunnel
+          # token. Keep the CI download in .github/workflows/*.yml on the same version.
+          image             = "cloudflare/cloudflared:2026.9.3@sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c"
           image_pull_policy = "Always"
           args              = ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:2000", "run"]
 
@@ -282,10 +297,24 @@ resource "kubernetes_deployment_v1" "cloudflared" {
   }
 }
 
+# Nothing dials in to cloudflared; its metrics port only answers the kubelet's
+# probes, which come from the node itself and are not subject to the policy.
+resource "kubernetes_network_policy_v1" "cloudflared" {
+  metadata {
+    name      = "deny-ingress"
+    namespace = kubernetes_namespace_v1.cloudflared.metadata[0].name
+  }
+  spec {
+    pod_selector {}
+    policy_types = ["Ingress"]
+  }
+}
+
 # claude.ai's connector servers must reach the MCP endpoint and its OAuth
 # machinery, and they cannot answer an Access challenge. The application
 # authenticates these paths itself (workspace token or OAuth grant), so Access
-# steps aside for exactly them while the rest of each test site stays gated.
+# steps aside for them, from Anthropic's published outbound range only; anyone
+# else (the operator's browser on the OAuth consent page) gets the e-mail PIN.
 # Production hostnames carry no Access at all, so this only exists off-production.
 locals {
   mcp_open_paths = var.is_production ? [] : [
@@ -303,7 +332,7 @@ resource "cloudflare_zero_trust_access_policy" "mcp_bypass" {
   account_id = var.cloudflare_account_id
   name       = "${var.cluster_name}-mcp-bypass"
   decision   = "bypass"
-  include    = [{ everyone = {} }]
+  include    = [for cidr in var.mcp_client_cidrs : { ip = { ip = cidr } }]
 }
 
 resource "cloudflare_zero_trust_access_application" "mcp" {
@@ -315,5 +344,61 @@ resource "cloudflare_zero_trust_access_application" "mcp" {
   policies = [{
     id         = cloudflare_zero_trust_access_policy.mcp_bypass[0].id
     precedence = 1
+    }, {
+    id         = cloudflare_zero_trust_access_policy.preview_operator[0].id
+    precedence = 2
   }]
+}
+
+# Zone-wide edge rules. The zones are shared by both workspaces and each of
+# these is a per-zone singleton, so only the production workspace owns them.
+locals {
+  zone_rule_zones = var.is_production ? var.cloudflare_zone_ids : {}
+}
+
+# Access and the WAF match the normalized URL; forward that same URL to the
+# origin, so an encoded path cannot match one rule at the edge and route
+# somewhere else in the app.
+resource "cloudflare_url_normalization_settings" "zone" {
+  for_each = local.zone_rule_zones
+  zone_id  = each.value
+  scope    = "both"
+  type     = "cloudflare"
+}
+
+# The OAuth endpoints answer the internet without Access, so guessing codes or
+# spamming client registration is throttled per IP. /mcp is left out on
+# purpose: every Claude user reaches it from Anthropic's few egress IPs, and the
+# Free plan cannot exempt a source range.
+resource "cloudflare_ruleset" "rate_limit" {
+  for_each = local.zone_rule_zones
+  zone_id  = each.value
+  name     = "rate-limit"
+  kind     = "zone"
+  phase    = "http_ratelimit"
+  rules = [{
+    description = "Throttle OAuth endpoints"
+    action      = "block"
+    expression  = "starts_with(http.request.uri.path, \"/oauth\")"
+    ratelimit = {
+      characteristics     = ["ip.src", "cf.colo.id"]
+      period              = 10
+      requests_per_period = 20
+      mitigation_timeout  = 10
+    }
+  }]
+}
+
+resource "cloudflare_zone_setting" "min_tls_version" {
+  for_each   = local.zone_rule_zones
+  zone_id    = each.value
+  setting_id = "min_tls_version"
+  value      = "1.2"
+}
+
+resource "cloudflare_zone_setting" "always_use_https" {
+  for_each   = local.zone_rule_zones
+  zone_id    = each.value
+  setting_id = "always_use_https"
+  value      = "on"
 }

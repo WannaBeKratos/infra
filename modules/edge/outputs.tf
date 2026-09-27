@@ -3,14 +3,11 @@ output "kube_api_hostname" {
   value       = local.kube_api_hostname
 }
 
-output "ci_access_client_id" {
-  description = "Cloudflare Access service token ID for CI (GitHub secret CF_ACCESS_CLIENT_ID)."
-  value       = cloudflare_zero_trust_access_service_token.ci.client_id
-  sensitive   = true
-}
-
-output "ci_access_client_secret" {
-  description = "Cloudflare Access service token secret for CI (GitHub secret CF_ACCESS_CLIENT_SECRET)."
-  value       = cloudflare_zero_trust_access_service_token.ci.client_secret
-  sensitive   = true
+output "ci_access_tokens" {
+  description = "Cloudflare Access service token per consumer (infra, then each site key): the CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET pair for that repository."
+  value = {
+    for consumer, token in cloudflare_zero_trust_access_service_token.ci :
+    consumer => { client_id = token.client_id, client_secret = token.client_secret }
+  }
+  sensitive = true
 }

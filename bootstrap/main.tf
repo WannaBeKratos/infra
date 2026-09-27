@@ -3,7 +3,8 @@
 # (gitignored; contains the token secret). Run once:
 #   terraform -chdir=bootstrap init
 #   terraform -chdir=bootstrap apply -var-file=../terraform.tfvars
-# Writes ../backend.hcl with the derived S3 credentials.
+# Writes ../backend.hcl with the derived S3 credentials, and ../backend-ci.hcl
+# with read-only ones for CI.
 #
 # The provider token needs Account > Workers R2 Storage:Edit and
 # Account > Account API Tokens:Edit on top of the main config's permissions.
@@ -70,5 +71,32 @@ resource "local_sensitive_file" "backend" {
   content         = <<-EOT
     access_key = "${cloudflare_account_token.state.id}"
     secret_key = "${sha256(cloudflare_account_token.state.value)}"
+  EOT
+}
+
+# CI only plans, with -lock=false, so its copy of the backend reads and never
+# writes: a malicious branch can still read state, but cannot rewrite it.
+resource "cloudflare_account_token" "state_ci" {
+  account_id = var.cloudflare_account_id
+  name       = "projects-terraform-state-ci"
+
+  policies = [{
+    effect = "allow"
+    # Workers R2 Storage Bucket Item Read
+    permission_groups = [{ id = "6a018a9f2fc74eb6b293b0c548f38b39" }]
+    resources = jsonencode({
+      "com.cloudflare.edge.r2.bucket.${var.cloudflare_account_id}_default_${cloudflare_r2_bucket.state.name}" = "*"
+    })
+  }]
+
+  expires_on = "2027-08-21T23:59:59Z"
+}
+
+resource "local_sensitive_file" "backend_ci" {
+  filename        = "${path.module}/../backend-ci.hcl"
+  file_permission = "0600"
+  content         = <<-EOT
+    access_key = "${cloudflare_account_token.state_ci.id}"
+    secret_key = "${sha256(cloudflare_account_token.state_ci.value)}"
   EOT
 }

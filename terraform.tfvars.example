@@ -5,11 +5,15 @@
 #
 # After changing anything in this file, refresh the CI copy so plans keep
 # matching what you apply:
-#   gh secret set TERRAFORM_TFVARS < terraform.tfvars
+#   gh secret set --env terraform-plan TERRAFORM_TFVARS < terraform.tfvars
 #
-# Provide the two API tokens as TF_VAR_hcloud_token and TF_VAR_cloudflare_api_token
-# instead of writing them here. The Cloudflare token needs Account:Cloudflare
-# Tunnel:Edit plus Zone:Read and DNS:Edit for the zones below.
+# Locally, provide the API tokens as TF_VAR_hcloud_tokens and
+# TF_VAR_cloudflare_api_token instead of writing them here. CI has no other
+# source, so its copy needs them:
+#   hcloud_tokens        = { dev = "...", production = "..." }  # one Hetzner project each
+#   cloudflare_api_token = "..."
+# The Cloudflare token's permissions are listed in variables.tf and in
+# docs/OPERATIONS.md, prerequisite 4.
 
 cloudflare_account_id = "your-account-id"
 

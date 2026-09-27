@@ -1,11 +1,16 @@
-variable "hcloud_token" {
-  description = "Hetzner Cloud API token with read/write access. Prefer TF_VAR_hcloud_token over a tfvars file."
-  type        = string
+variable "hcloud_tokens" {
+  description = "Hetzner Cloud read/write API token per environment ({ dev = ..., production = ... }), each from that environment's own Hetzner project: the token also lives in-cluster (kube-system/hcloud), so a shared project would let a dev compromise reach production. Prefer TF_VAR_hcloud_tokens over a tfvars file."
+  type        = map(string)
   sensitive   = true
+
+  validation {
+    condition     = length(distinct(values(var.hcloud_tokens))) == length(var.hcloud_tokens)
+    error_message = "Each environment needs its own token, from its own Hetzner project."
+  }
 }
 
 variable "cloudflare_api_token" {
-  description = "Cloudflare API token with Account:Cloudflare Tunnel:Edit plus Zone:Read and DNS:Edit for the configured zones."
+  description = "Cloudflare API token with Account:Cloudflare Tunnel:Edit, Account:Access: Apps and Policies:Edit, Account:Access: Service Tokens:Edit, Account:Workers R2 Storage:Edit, Account:Account API Tokens:Edit, plus Zone:Read, DNS:Edit, Zone WAF:Edit and Zone Settings:Edit for the configured zones."
   type        = string
   sensitive   = true
 }
@@ -54,9 +59,11 @@ variable "firewall_ssh_source" {
   description = "CIDRs allowed to reach node SSH. No default on purpose: it is the operator's own address, so it lives in terraform.tfvars (never in git). Change it and the TERRAFORM_TFVARS GitHub secret has to be refreshed too."
   type        = list(string)
 
+  # kube-hetzner's own default is 0.0.0.0/0, and CI hides the plan diff, so a
+  # world-open entry must fail loudly rather than slip through.
   validation {
-    condition     = alltrue([for c in var.firewall_ssh_source : can(cidrhost(c, 0))])
-    error_message = "firewall_ssh_source entries must be valid IPv4/IPv6 CIDRs."
+    condition     = alltrue([for c in var.firewall_ssh_source : can(cidrhost(c, 0)) && !endswith(c, "/0")])
+    error_message = "firewall_ssh_source entries must be valid IPv4/IPv6 CIDRs, and never /0."
   }
 }
 
@@ -65,8 +72,8 @@ variable "firewall_kube_api_source" {
   type        = list(string)
 
   validation {
-    condition     = alltrue([for c in var.firewall_kube_api_source : can(cidrhost(c, 0))])
-    error_message = "firewall_kube_api_source entries must be valid IPv4/IPv6 CIDRs."
+    condition     = alltrue([for c in var.firewall_kube_api_source : can(cidrhost(c, 0)) && !endswith(c, "/0")])
+    error_message = "firewall_kube_api_source entries must be valid IPv4/IPv6 CIDRs, and never /0."
   }
 }
 
@@ -116,4 +123,15 @@ variable "sites" {
     production_aliases  = list(string)
     test_hostname       = string
   }))
+}
+
+variable "mcp_client_cidrs" {
+  description = "Source ranges that skip Cloudflare Access on the test site's MCP and OAuth paths. Default: Anthropic's published outbound range (https://docs.claude.com/en/api/ip-addresses), which claude.ai's connector servers call from. Add your own CIDR to call the endpoint from anywhere else without the e-mail PIN."
+  type        = list(string)
+  default     = ["160.79.104.0/21"]
+
+  validation {
+    condition     = length(var.mcp_client_cidrs) > 0 && alltrue([for c in var.mcp_client_cidrs : can(cidrhost(c, 0)) && !endswith(c, "/0")])
+    error_message = "mcp_client_cidrs needs at least one valid CIDR, and never /0 (that is the old bypass-for-everyone)."
+  }
 }

@@ -32,7 +32,7 @@ resource "cloudflare_account_token" "applim_feed" {
 resource "kubernetes_secret_v1" "applim_litestream" {
   metadata {
     name      = local.is_production ? "applim-litestream" : "applim-test-litestream"
-    namespace = local.is_production ? "applim" : "applim-test"
+    namespace = kubernetes_namespace_v1.app["applim"].metadata[0].name
   }
 
   data = {
@@ -48,7 +48,8 @@ resource "kubernetes_secret_v1" "applim_litestream" {
 
 # The site and the sweeper are one pod today, sharing the feed database through the
 # filesystem. Where they are not - two Deployments, one owning the file and serving it
-# to the other - a cluster is not a boundary on its own: any pod can reach any Service.
+# to the other - a namespace is not a boundary on its own: the NetworkPolicy in
+# services.tf keeps other namespaces out, but any pod inside can reach any Service.
 # This is the token both sides carry, minted here so neither repository holds it and
 # nobody has to type it. Without this Secret the feed API is not mapped at all and the
 # app runs exactly as before, from the file.
@@ -60,7 +61,7 @@ resource "random_password" "applim_feed_api" {
 resource "kubernetes_secret_v1" "applim_feed_api" {
   metadata {
     name      = local.is_production ? "applim-feed-api" : "applim-test-feed-api"
-    namespace = local.is_production ? "applim" : "applim-test"
+    namespace = kubernetes_namespace_v1.app["applim"].metadata[0].name
   }
 
   data = {

@@ -5,11 +5,11 @@
 # by policy — CI proves a change plans cleanly, a person runs it.
 #
 # Secrets (set from WSL, never committed):
-#   gh secret set BACKEND_HCL       < backend.hcl
+#   gh secret set BACKEND_HCL       < backend-ci.hcl   (read-only state token)
 #   gh secret set TERRAFORM_TFVARS  < terraform.tfvars
 #   gh secret set SSH_PUBLIC_KEY      < ~/.ssh/hetzner_kube.pub
 #   gh secret set SSH_PUBLIC_KEY_PROD < ~/.ssh/hetzner_kube_prod.pub
-# plus one Access token pair per workspace; see the README's secrets section.
+# plus one Access token pair per workspace; see docs/OPERATIONS.md, "The secrets model".
 name: Terraform
 
 on:
@@ -32,9 +32,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TF_IN_AUTOMATION: "true"
+      # main.tf rejects the default workspace, and validate evaluates it too.
+      TF_WORKSPACE: dev
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: "1.14.4"
       - run: terraform fmt -check -recursive
@@ -45,10 +47,10 @@ jobs:
     name: Checkov
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # No terraform init here on purpose: only the repo's own files are policy,
       # not the vendored module. Config and skip reasons live in .checkov.yaml.
-      - uses: bridgecrewio/checkov-action@v12
+      - uses: bridgecrewio/checkov-action@444c9db6fa75e2d9c19ebf1fde7322089be9009e # v12.3125.0
         with:
           config_file: .checkov.yaml
 
@@ -56,12 +58,12 @@ jobs:
     name: Gitleaks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Whole history: a secret removed in the working tree is still a
           # secret if any reachable commit carries it.
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Free for public repositories and personal accounts; organisations
@@ -81,17 +83,31 @@ jobs:
     # Without the secrets the job is skipped rather than failed, so the repo
     # works before they are configured; once branch protection requires this
     # check, configure them.
-    # Also skipped for pull requests from forks: they run without secrets, so the
-    # plan could only fail. Validate, Checkov and gitleaks still gate fork PRs.
-    if: ${{ vars.TERRAFORM_PLAN_ENABLED == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    # Also skipped for pull requests from forks and from Dependabot: both run
+    # without Actions secrets, so the plan could only fail. Validate, Checkov and
+    # gitleaks still gate them.
+    if: ${{ vars.TERRAFORM_PLAN_ENABLED == 'true' && github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    # A plan runs the branch's own code with the state credentials, so its
+    # secrets live in this environment; give it a required reviewer to make
+    # every plan wait for a person (docs/OPERATIONS.md, "The secrets model").
+    environment: terraform-plan
     env:
       TF_IN_AUTOMATION: "true"
       TF_DATA_DIR: .terraform-ci
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: "1.14.4"
+
+      # Pinned and checksummed, and installed before any secret is on disk;
+      # keep in step with the in-cluster image (modules/edge/main.tf).
+      - name: Install cloudflared
+        run: |
+          curl -fsSLo /usr/local/bin/cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/download/2026.9.3/cloudflared-linux-amd64
+          echo "77e26d8d900e0b8469f416239d14b5f296525fdf79fee6f511ef55609e3fbac2  /usr/local/bin/cloudflared" | sha256sum -c -
+          chmod +x /usr/local/bin/cloudflared
 
       - name: Materialise backend and variables
         env:
@@ -122,26 +138,13 @@ jobs:
 
       # Each cluster mints its own Access service token, and each kube-API
       # Access application only trusts its own. One pair per workspace, the
-      # same way the SSH public keys are split.
+      # same way the SSH public keys are split; each leg only sees its own.
       - name: Open a tunnel to the kube-API
         env:
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          CF_ACCESS_CLIENT_ID_PROD: ${{ secrets.CF_ACCESS_CLIENT_ID_PROD }}
-          CF_ACCESS_CLIENT_SECRET_PROD: ${{ secrets.CF_ACCESS_CLIENT_SECRET_PROD }}
+          KUBE_API_HOST: ${{ matrix.workspace == 'production' && vars.KUBE_API_HOST_PROD || vars.KUBE_API_HOST_DEV }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ matrix.workspace == 'production' && secrets.CF_ACCESS_CLIENT_ID_PROD || secrets.CF_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ matrix.workspace == 'production' && secrets.CF_ACCESS_CLIENT_SECRET_PROD || secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
-          if [ "${{ matrix.workspace }}" = "production" ]; then
-            KUBE_API_HOST="${{ vars.KUBE_API_HOST_PROD }}"
-            export TUNNEL_SERVICE_TOKEN_ID="$CF_ACCESS_CLIENT_ID_PROD"
-            export TUNNEL_SERVICE_TOKEN_SECRET="$CF_ACCESS_CLIENT_SECRET_PROD"
-          else
-            KUBE_API_HOST="${{ vars.KUBE_API_HOST_DEV }}"
-            export TUNNEL_SERVICE_TOKEN_ID="$CF_ACCESS_CLIENT_ID"
-            export TUNNEL_SERVICE_TOKEN_SECRET="$CF_ACCESS_CLIENT_SECRET"
-          fi
-          curl -fsSL -o /usr/local/bin/cloudflared \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
-          chmod +x /usr/local/bin/cloudflared
           cloudflared access tcp --hostname "$KUBE_API_HOST" --url 127.0.0.1:6443 &
           for i in $(seq 1 30); do
             (exec 3<>/dev/tcp/127.0.0.1/6443) 2>/dev/null && break

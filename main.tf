@@ -3,7 +3,9 @@
 #   terraform workspace new production  -> projects-production
 # Requires a one-time MicroOS snapshot build with Packer; see README.
 locals {
-  environment       = terraform.workspace == "default" ? "production" : terraform.workspace
+  # No "default" entry on purpose: its state is a separate, empty key, so an
+  # unselected workspace would plan a second production. It fails here instead.
+  environment       = { dev = "dev", production = "production" }[terraform.workspace]
   is_production     = local.environment == "production"
   full_cluster_name = "${var.cluster_name}-${local.environment}"
 }
@@ -15,10 +17,10 @@ module "cluster" {
     hcloud = hcloud
   }
 
-  hcloud_token = var.hcloud_token
+  hcloud_token = var.hcloud_tokens[local.environment]
   cluster_name = local.full_cluster_name
-  # Production uses its own keypair (<private_key_path>_prod): Hetzner rejects
-  # the same key material twice in one project, and per-env keys isolate access.
+  # Production uses its own keypair (<private_key_path>_prod), so the two
+  # environments never share node access.
   ssh_public_key  = file(pathexpand(local.is_production ? "${var.ssh_private_key_path}_prod.pub" : var.ssh_public_key_path))
   ssh_private_key = file(pathexpand(local.is_production ? "${var.ssh_private_key_path}_prod" : var.ssh_private_key_path))
 
@@ -44,4 +46,5 @@ module "edge" {
   enable_production_cutover = var.enable_production_cutover
   preview_access_emails     = var.preview_access_emails
   operations_domain         = var.operations_domain
+  mcp_client_cidrs          = var.mcp_client_cidrs
 }
