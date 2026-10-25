@@ -64,7 +64,8 @@ resource "kubernetes_secret_v1" "applim_feed_api" {
     namespace = kubernetes_namespace_v1.app["applim"].metadata[0].name
   }
 
+  # Named as the app reads it (configuration key Feed:ApiToken), so envFrom delivers it as is.
   data = {
-    APPLIM_FEED_API_TOKEN = random_password.applim_feed_api.result
+    Feed__ApiToken = random_password.applim_feed_api.result
   }
 }
