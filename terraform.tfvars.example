@@ -43,16 +43,20 @@ preview_access_emails = ["you@example.com"]
 # and you are ready to move production traffic away from App Platform.
 enable_production_cutover = false
 
-# Per-app runtime environment, rendered into the applim-env Secret. Real values
-# only ever live in terraform.tfvars.
+# Per-app runtime environment, one set per environment, rendered into the
+# applim-test-env (dev) and applim-env (production) Secrets. Give dev its own
+# keys, never production's. Real values only ever live in terraform.tfvars.
 # applim_env = {
-#   Skills__Model__ApiKey = "..."
+#   dev        = { Skills__Model__ApiKey = "..." }
+#   production = { Skills__Model__ApiKey = "..." }
 # }
 
 operations_domain = "example.com"
 
+# The applim key is required: backups.tf, applim_env and the dev MCP bypass look
+# it up by name. Further apps add their own keys.
 sites = {
-  my-site = {
+  applim = {
     production_hostname = "www.example.com"
     production_aliases  = ["example.com"]
     test_hostname       = "test.example.com"

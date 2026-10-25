@@ -90,10 +90,16 @@ variable "enable_production_cutover" {
 }
 
 variable "applim_env" {
-  description = "Environment for the applim pods (e.g. Skills__Model__ApiKey). Set it in terraform.tfvars, which never enters git."
-  type        = map(string)
+  description = "Environment for the applim pods, per environment ({ dev = { Skills__Model__ApiKey = ... }, production = { ... } }). Each gets its own values, so a dev leak never burns a production key. Set it in terraform.tfvars, which never enters git."
+  type        = map(map(string))
   default     = {}
   sensitive   = true
+
+  # A misspelt key would plan that environment's Secret away instead of failing.
+  validation {
+    condition     = alltrue([for env in keys(var.applim_env) : contains(["dev", "production"], env)])
+    error_message = "applim_env is keyed by environment: dev and/or production."
+  }
 }
 
 variable "kube_api_url" {

@@ -186,7 +186,7 @@ or a manifest:
 |---|---|---|
 | `tunnel-token` | `cloudflared` | the tunnel token, read from the Cloudflare API at apply time |
 | `deployer-token` | each app namespace | the `deployer` ServiceAccount's token, behind `deployer_kubeconfigs` |
-| `applim-env` / `applim-test-env` | `applim` / `applim-test` | `var.applim_env` from `terraform.tfvars`, referenced by the manifest as `optional` |
+| `applim-env` / `applim-test-env` | `applim` / `applim-test` | that environment's entry in `var.applim_env` (`terraform.tfvars`), referenced by the manifest as `optional` |
 | `applim-litestream` / `applim-test-litestream` | `applim` / `applim-test` | R2 bucket credentials minted in `backups.tf` |
 | `registry-ghcr` | each app namespace | created by the deploy workflow from `GHCR_PULL_TOKEN` |
 | `hcloud`, `hcloud-csi` | `kube-system` | that environment's Hetzner token, placed by kube-hetzner |
@@ -309,6 +309,9 @@ stays where it is.
          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
    ```
 
+   The deploy job does not order runs itself, so give the calling workflow a
+   concurrency group per branch that never cancels on `main`, as applim's
+   `ci.yml` does: two quick merges then deploy in push order.
 6. Give the repository the full caller kit from "GitHub — each application
    repository" above: environment secrets, variables, the protected `main` and
    the environment branch policies. Reusable workflows read secrets and
@@ -366,6 +369,29 @@ index digest from Docker Hub. Update `modules/edge/main.tf` and both workflows
 together. For kubectl-argo-rollouts, match the controller the chart in
 `rollouts.tf` installs (its `appVersion`) and take the hash from that release's
 `argo-rollouts-checksums.txt`.
+
+### Patch the nodes
+
+Neither the OS nor k3s updates itself (`modules/cluster`): with one control
+plane, an unattended reboot or minor upgrade has nothing to fail over to, and
+kube-hetzner requires OS auto-upgrade off below three control planes. Patch on a
+day you choose, dev before production, with the admin kubeconfig. Node addresses
+are in `kubectl get nodes -o wide`; production nodes take the `_prod` key.
+
+```bash
+# OS: one node at a time, agents before the control plane.
+kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
+ssh -i ~/.ssh/hetzner_kube root@<node-ip> 'systemctl start transactional-update.service && reboot'
+kubectl uncordon <node>   # once it is Ready again
+
+# k3s: the system-upgrade-controller moves labelled nodes to the newest release
+# of the stable channel, control plane first. Unlabel once every node is done.
+kubectl label nodes --all k3s_upgrade=true
+kubectl label nodes --all k3s_upgrade-
+```
+
+Nodes that joined while automatic upgrades were on still carry `k3s_upgrade=true`;
+run the last command once on each cluster so they stop upgrading on their own.
 
 ### Raise the agent count
 

@@ -35,8 +35,9 @@ resource "kubernetes_service_account_v1" "deployer" {
 }
 
 # Exactly what deploy-application.yml does: apply the Services, the Rollout and
-# the registry pull Secret, then watch the rollout. An app whose own manifest
-# adds other kinds adds them here.
+# the registry pull Secret, then watch the rollout - plus the Deployments an
+# app's own manifest adds (applim's Redis). An app whose manifest adds other
+# kinds adds them here.
 resource "kubernetes_role_v1" "deployer" {
   for_each = kubernetes_namespace_v1.app
 
@@ -46,8 +47,8 @@ resource "kubernetes_role_v1" "deployer" {
   }
 
   rule {
-    api_groups = ["", "argoproj.io"]
-    resources  = ["services", "secrets", "rollouts"]
+    api_groups = ["", "apps", "argoproj.io"]
+    resources  = ["services", "secrets", "deployments", "rollouts"]
     verbs      = ["get", "list", "watch", "create", "update", "patch"]
   }
 
@@ -122,15 +123,15 @@ resource "kubernetes_network_policy_v1" "app" {
 }
 
 # The applim pods read their secrets from an env Secret the deploy references as
-# optional. The values live in terraform.tfvars (gitignored), so the key is typed
-# once there rather than into kubectl.
+# optional. The values live in terraform.tfvars (gitignored), one set per
+# environment, so the key is typed once there rather than into kubectl.
 resource "kubernetes_secret_v1" "applim_env" {
-  count = length(var.applim_env) > 0 ? 1 : 0
+  count = length(lookup(var.applim_env, local.environment, {})) > 0 ? 1 : 0
 
   metadata {
     name      = local.is_production ? "applim-env" : "applim-test-env"
     namespace = kubernetes_namespace_v1.app["applim"].metadata[0].name
   }
 
-  data = var.applim_env
+  data = var.applim_env[local.environment]
 }
