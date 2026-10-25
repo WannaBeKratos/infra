@@ -38,6 +38,12 @@ module "kube" {
 
   allow_scheduling_on_control_plane = var.allow_scheduling_on_control_plane
 
+  # One control plane, so nothing updates itself: kube-hetzner requires OS
+  # auto-upgrade off below three control planes, and k3s would otherwise follow
+  # the live stable channel across minor versions. Patch by hand: docs/OPERATIONS.md.
+  automatically_upgrade_os         = false
+  automatically_upgrade_kubernetes = false
+
   # Always at least one agent: a single-node cluster makes the module open
   # ports 80/443 to the world for klipper-lb, which the tunnel never needs.
   agent_nodepools = [

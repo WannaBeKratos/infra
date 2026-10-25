@@ -234,9 +234,10 @@ resource "kubernetes_deployment_v1" "cloudflared" {
           name = "cloudflared"
           # Tag for people, digest for the kubelet: this pod holds the tunnel
           # token. Keep the CI download in .github/workflows/*.yml on the same version.
-          image             = "cloudflare/cloudflared:2026.9.3@sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c"
-          image_pull_policy = "Always"
-          args              = ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:2000", "run"]
+          # No pull policy: a digest never changes, and the default (IfNotPresent)
+          # lets the pod restart from the node's copy while Docker Hub is down.
+          image = "cloudflare/cloudflared:2026.9.3@sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c"
+          args  = ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:2000", "run"]
 
           env {
             name = "TUNNEL_TOKEN"
